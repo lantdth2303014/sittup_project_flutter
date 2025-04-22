@@ -39,6 +39,7 @@ class _SitUpDetectorPageState extends State<SitUpDetectorPage> {
   late CameraController _cameraController;
   final PoseDetector _poseDetector = PoseDetector(options: PoseDetectorOptions());
   bool _isDetecting = false;
+  bool _isDisposed = false;
   int _counter = 0;
   String _position = 'down';
   double _latestAngle = 0.0;
@@ -60,13 +61,17 @@ class _SitUpDetectorPageState extends State<SitUpDetectorPage> {
     final selectedCamera = cameras.firstWhere((c) => c.lensDirection == _currentDirection);
     _cameraController = CameraController(selectedCamera, ResolutionPreset.high);
     await _cameraController.initialize();
-    _cameraController.startImageStream(_processCameraImage);
+    if (!mounted || _isDisposed) return;
+    await _cameraController.startImageStream(_processCameraImage);
+    if (!mounted || _isDisposed) return;
     setState(() {});
   }
 
   Future<void> _switchCamera() async {
-    _cameraController.stopImageStream();
+    await _cameraController.stopImageStream();
     await _cameraController.dispose();
+
+    if (!mounted || _isDisposed) return;
 
     setState(() {
       _currentDirection =
@@ -88,7 +93,7 @@ class _SitUpDetectorPageState extends State<SitUpDetectorPage> {
   }
 
   void _processCameraImage(CameraImage image) async {
-    if (_isDetecting) return;
+    if (_isDetecting || _isDisposed) return;
     _isDetecting = true;
 
     final WriteBuffer allBytes = WriteBuffer();
@@ -113,6 +118,8 @@ class _SitUpDetectorPageState extends State<SitUpDetectorPage> {
     _imageSize = metadata.size;
 
     final poses = await _poseDetector.processImage(inputImage);
+
+    if (_isDisposed || !mounted) return;
 
     if (poses.isNotEmpty) {
       final Pose pose = poses.first;
@@ -142,9 +149,11 @@ class _SitUpDetectorPageState extends State<SitUpDetectorPage> {
 
         final avgAngle = (leftAngle + rightAngle) / 2.0;
 
-        setState(() {
-          _latestAngle = avgAngle;
-        });
+        if (!_isDisposed && mounted) {
+          setState(() {
+            _latestAngle = avgAngle;
+          });
+        }
 
         if (_position == 'down') {
           if (avgAngle < 90) {
@@ -176,6 +185,7 @@ class _SitUpDetectorPageState extends State<SitUpDetectorPage> {
 
   @override
   void dispose() {
+    _isDisposed = true;
     _cameraController.dispose();
     _poseDetector.close();
     super.dispose();
@@ -183,12 +193,24 @@ class _SitUpDetectorPageState extends State<SitUpDetectorPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_cameraController.value.isInitialized || _isDisposed) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
     return Scaffold(
-      body: _cameraController.value.isInitialized
-          ? Stack(
+      body: Stack(
         fit: StackFit.expand,
         children: [
-          CameraPreview(_cameraController),
+          FittedBox(
+            fit: BoxFit.cover,
+            child: SizedBox(
+              width: _cameraController.value.previewSize!.height,
+              height: _cameraController.value.previewSize!.width,
+              child: CameraPreview(_cameraController),
+            ),
+          ),
           CustomPaint(
             painter: PosePainter(_landmarks, _imageSize, MediaQuery.of(context).size),
           ),
@@ -217,8 +239,7 @@ class _SitUpDetectorPageState extends State<SitUpDetectorPage> {
             ),
           )
         ],
-      )
-          : const Center(child: CircularProgressIndicator()),
+      ),
     );
   }
 }
