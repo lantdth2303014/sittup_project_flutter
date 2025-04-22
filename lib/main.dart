@@ -6,7 +6,6 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 late List<CameraDescription> cameras;
@@ -36,10 +35,9 @@ class SitUpDetectorPage extends StatefulWidget {
 }
 
 class _SitUpDetectorPageState extends State<SitUpDetectorPage> {
-  late CameraController _cameraController;
+  CameraController? _cameraController;
   final PoseDetector _poseDetector = PoseDetector(options: PoseDetectorOptions());
   bool _isDetecting = false;
-  bool _isDisposed = false;
   int _counter = 0;
   String _position = 'down';
   double _latestAngle = 0.0;
@@ -59,23 +57,30 @@ class _SitUpDetectorPageState extends State<SitUpDetectorPage> {
   Future<void> _init() async {
     await Permission.camera.request();
     final selectedCamera = cameras.firstWhere((c) => c.lensDirection == _currentDirection);
-    _cameraController = CameraController(selectedCamera, ResolutionPreset.high);
-    await _cameraController.initialize();
-    if (!mounted || _isDisposed) return;
-    await _cameraController.startImageStream(_processCameraImage);
-    if (!mounted || _isDisposed) return;
-    setState(() {});
+    final controller = CameraController(selectedCamera, ResolutionPreset.high);
+    await controller.initialize();
+    await controller.startImageStream(_processCameraImage);
+    if (!mounted) return;
+    setState(() {
+      _cameraController = controller;
+    });
   }
 
   Future<void> _switchCamera() async {
-    await _cameraController.stopImageStream();
-    await _cameraController.dispose();
-
-    if (!mounted || _isDisposed) return;
+    final oldController = _cameraController;
+    _cameraController = null;
+    if (mounted) {
+      setState(() {});
+      final completer = Completer<void>();
+      WidgetsBinding.instance.addPostFrameCallback((_) => completer.complete());
+      await completer.future;
+    }
+    await oldController?.dispose();
 
     setState(() {
-      _currentDirection =
-      _currentDirection == CameraLensDirection.back ? CameraLensDirection.front : CameraLensDirection.back;
+      _currentDirection = _currentDirection == CameraLensDirection.back
+          ? CameraLensDirection.front
+          : CameraLensDirection.back;
     });
 
     await _init();
@@ -93,7 +98,7 @@ class _SitUpDetectorPageState extends State<SitUpDetectorPage> {
   }
 
   void _processCameraImage(CameraImage image) async {
-    if (_isDetecting || _isDisposed) return;
+    if (_isDetecting || _cameraController == null) return;
     _isDetecting = true;
 
     final WriteBuffer allBytes = WriteBuffer();
@@ -118,8 +123,6 @@ class _SitUpDetectorPageState extends State<SitUpDetectorPage> {
     _imageSize = metadata.size;
 
     final poses = await _poseDetector.processImage(inputImage);
-
-    if (_isDisposed || !mounted) return;
 
     if (poses.isNotEmpty) {
       final Pose pose = poses.first;
@@ -149,11 +152,9 @@ class _SitUpDetectorPageState extends State<SitUpDetectorPage> {
 
         final avgAngle = (leftAngle + rightAngle) / 2.0;
 
-        if (!_isDisposed && mounted) {
-          setState(() {
-            _latestAngle = avgAngle;
-          });
-        }
+        setState(() {
+          _latestAngle = avgAngle;
+        });
 
         if (_position == 'down') {
           if (avgAngle < 90) {
@@ -185,15 +186,14 @@ class _SitUpDetectorPageState extends State<SitUpDetectorPage> {
 
   @override
   void dispose() {
-    _isDisposed = true;
-    _cameraController.dispose();
+    _cameraController?.dispose();
     _poseDetector.close();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    if (!_cameraController.value.isInitialized || _isDisposed) {
+    if (_cameraController?.value.isInitialized != true) {
       return const Scaffold(
         body: Center(child: CircularProgressIndicator()),
       );
@@ -206,9 +206,9 @@ class _SitUpDetectorPageState extends State<SitUpDetectorPage> {
           FittedBox(
             fit: BoxFit.cover,
             child: SizedBox(
-              width: _cameraController.value.previewSize!.height,
-              height: _cameraController.value.previewSize!.width,
-              child: CameraPreview(_cameraController),
+              width: _cameraController!.value.previewSize!.height,
+              height: _cameraController!.value.previewSize!.width,
+              child: CameraPreview(_cameraController!),
             ),
           ),
           CustomPaint(
